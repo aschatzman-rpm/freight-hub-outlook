@@ -1,4 +1,6 @@
-/* Freight Hub for Outlook (v4.16) · the panel.
+/* Freight Hub for Outlook (v4.16.1) · the panel.
+   v4.16.1: previews, 3 tries before an error, a light load index (card before the Hub answers), memory per thread,
+   repeated images = signature, instant Today, and now → email when the driver changes.
    Holds no data, no keys and no Hub address in code: those are typed in once and kept in Outlook roamingSettings (your mailbox).
    Reads only the email you have open. Nothing is saved, ticked or opened without a tap (unless you turn on auto-save).
    v4.16: one clear next step per email (driver info, status/ETA, detention/lumper, POD/RC/invoice), Today, Find, reply templates,
@@ -13,7 +15,7 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const rid = () => { const a = new Uint8Array(12); crypto.getRandomValues(a); return 'r' + Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); };
   const P = { url: '', key: '', name: '', switches: null, view: 'main', tab: 'email', seq: 0, mail: null, res: null, files: {}, showSig: false, conflicts: [], doneTexts: {}, busy: false, checks: null,
-    ready: null, today: null, find: { q: '', res: null, mode: '' }, loadView: null, upd: null, details: false };
+    ready: null, today: null, idx: null, quick: '', find: { q: '', res: null, mode: '' }, loadView: null, upd: null, details: false };
 
   /* ---------- memory: this session (full) + this computer (12 h, no file contents, no money, no key) ---------- */
   const MEMO = new Map(); const MEMO_MAX = 50; const MEM_KEY = 'fh.mem.v2'; const MEM_TTL = 12 * 3600e3;
@@ -22,7 +24,7 @@
   function memRead() { try { const o = JSON.parse(ls.get(MEM_KEY) || '{}'); const now = Date.now(); Object.keys(o).forEach(k => { if (!o[k] || now - o[k].t > MEM_TTL) delete o[k]; }); return o; } catch (e) { return {}; } }
   function memWrite(o) { const ks = Object.keys(o).sort((a, b) => o[a].t - o[b].t); while (ks.length > MEMO_MAX) delete o[ks.shift()]; ls.set(MEM_KEY, JSON.stringify(o)); }
   const strip = m => Object.assign({}, m, { atts: m.atts.map(a => ({ id: a.id, name: a.name, size: a.size, contentType: a.contentType, isInline: a.isInline, sha256: a.sha256 })) });
-  function remember() { const k = memoKey(P.mail); if (!k || !P.res) return; MEMO.delete(k); MEMO.set(k, { mail: P.mail, res: P.res, files: JSON.parse(JSON.stringify(P.files)) }); while (MEMO.size > MEMO_MAX) MEMO.delete(MEMO.keys().next().value);
+  function remember() { const k = memoKey(P.mail); if (!k || !P.res) return; const R = P.res; if (R.loadId && (R.already || (R.match && (R.match.certain || R.match.picked)))) thrSet(P.mail.conversationId, R.loadId); MEMO.delete(k); MEMO.set(k, { mail: P.mail, res: P.res, files: JSON.parse(JSON.stringify(P.files)) }); while (MEMO.size > MEMO_MAX) MEMO.delete(MEMO.keys().next().value);
     const o = memRead(); o[k] = { t: Date.now(), mail: strip(P.mail), res: P.res, files: P.files }; memWrite(o); }
   function forget() { const k = memoKey(P.mail); if (!k) return; MEMO.delete(k); const o = memRead(); if (o[k]) { delete o[k]; memWrite(o); } }
   function recall(k) { const a = MEMO.get(k); if (a) return a; const o = memRead()[k]; if (!o) return null; o.mail.atts.forEach(f => { f.read = false; }); return o; }
@@ -31,13 +33,20 @@
   const rs = () => Office.context.roamingSettings;
   function loadSettings() { P.url = rs().get('hubUrl') || ''; P.key = rs().get('hubKey') || ''; P.name = rs().get('hubName') || ''; P.details = ls.get('fh.details') === '1'; }
   function saveSettings(o) { return new Promise((ok, bad) => { Object.keys(o).forEach(k => { if (o[k] == null) rs().remove(k); else rs().set(k, o[k]); }); rs().saveAsync(r => r.status === Office.AsyncResultStatus.Succeeded ? ok() : bad(r.error)); }); }
-  async function api(action, data, ms, requestId) {
+  const sleep = ms => new Promise(z => setTimeout(z, ms)); const RETRY_WAIT = [1000, 3000];
+  /** v4.16.1: up to 3 tries when the Hub can't be reached, with the same request ID (the Hub keeps each answer for 6 h, so a save is never done twice) */
+  async function api(action, data, ms, requestId) { const id = requestId || rid(); let last;
+    for (let i = 0; i < 3; i++) { try { const r = await apiOnce(action, data, ms, id); if (i) retryNote(''); return r; }
+      catch (e) { last = e; if (!e.net || i === 2) break; retryNote('The Hub didn\'t answer · trying again (' + (i + 2) + ' of 3)…'); await sleep((window.__fhRetryWait || RETRY_WAIT)[i]); } }
+    retryNote(''); throw last; }
+  function retryNote(t) { let el = document.getElementById('retry-note'); if (!t) { if (el) el.remove(); return; } if (!el) { el = document.createElement('div'); el.id = 'retry-note'; el.className = 'note'; el.setAttribute('role', 'status'); const app = $('#app'); app.parentNode.insertBefore(el, app); } el.textContent = t; }
+  async function apiOnce(action, data, ms, requestId) {
     if (!P.url || !P.key) throw Object.assign(new Error('Not connected'), { auth: true });
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms || 20000);
     try {
       const r = await fetch(P.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: P.key, action, requestId: requestId || rid(), client: CLIENT }, data || {})), redirect: 'follow', signal: ctl.signal });
-      const j = await r.json(); if (j && j.ok === false) { const e = new Error(j.message || 'The Hub said no.'); e.auth = !!j.auth; throw e; } return j;
-    } catch (e) { if (e.name === 'AbortError') throw new Error('Can\'t reach the Hub (it took too long).'); if (e instanceof TypeError) throw new Error('Can\'t reach the Hub.'); throw e; }
+      if (r.status >= 500) throw Object.assign(new Error('The Hub had a problem (' + r.status + ').'), { net: true }); let j; try { j = await r.json(); } catch (x) { throw Object.assign(new Error('The Hub sent back a page instead of an answer.'), { net: true }); } if (j && j.ok === false) { const e = new Error(j.message || 'The Hub said no.'); e.auth = !!j.auth; throw e; } return j;
+    } catch (e) { if (e.name === 'AbortError') throw Object.assign(new Error('Can\'t reach the Hub (it took too long).'), { net: true }); if (e instanceof TypeError) throw Object.assign(new Error('Can\'t reach the Hub.'), { net: true }); throw e; }
     finally { clearTimeout(t); }
   }
 
@@ -60,12 +69,63 @@
   async function readContents(m) { const it = Office.context.mailbox.item; if (!it || memoKey({ internetMessageId: it.internetMessageId, itemId: it.itemId }) !== memoKey(m)) return;
     await Promise.all(m.atts.filter(f => !f.read).map(async f => {
       if (sup('1.8') && f.size <= MAX_ONE_CALL) { try { const c = await cb(it.getAttachmentContentAsync.bind(it), f.id); if (c.format === 'base64' || c.format === Office.MailboxEnums.AttachmentContentFormat.Base64) { f.base64 = c.content; f.sha256 = await sha256(b64bytes(c.content)); } } catch (e) { /* unreadable: can't be saved */ } }
-      f.read = true; })); }
+      f.read = true; })); try { sigLearn(m); } catch (e) { /* storage blocked */ } }
   async function emailCopy() { const it = Office.context.mailbox.item;
     if (sup('1.14') && it.getAsFileAsync) { try { return { eml: await cb(it.getAsFileAsync.bind(it)) }; } catch (e) { /* fall back */ } }
     let headers = ''; if (sup('1.8') && it.getAllInternetHeadersAsync) { try { headers = await cb(it.getAllInternetHeadersAsync.bind(it)); } catch (e) { headers = ''; } }
     let html = ''; try { html = await cb(it.body.getAsync.bind(it.body), Office.CoercionType.Html); } catch (e) { html = ''; }
     return { html, headers }; }
+
+  /* ---------- v4.16.1: a light index of active loads (load cards only, no money) → the card shows before the Hub answers ---------- */
+  const IDX_KEY = 'fh.idx.v1', IDX_TTL = 10 * 60e3, THR_KEY = 'fh.thr.v1', THR_TTL = 30 * 864e5, SIG_KEY = 'fh.sig.v1';
+  function idxLoad() { if (P.idx) return P.idx; try { const o = JSON.parse(ls.get(IDX_KEY) || 'null'); if (o && Date.now() - o.t < IDX_TTL) { P.idx = o; if (o.today && !P.today) P.today = o.today; return o; } } catch (e) { /* none */ } return null; }
+  async function idxRefresh() { try { const r = await api('index', { withToday: true }, 25000); P.idx = { t: Date.now(), loads: r.loads || [], today: r.today || null }; ls.set(IDX_KEY, JSON.stringify(P.idx));
+      if (r.today) { P.today = r.today; tabs(); if (P.tab === 'today' && P.view === 'main') renderToday(false); } return true; }
+    catch (e) { if (/Unknown request/i.test(e.message || '')) { try { P.today = await api('today', {}, 20000); tabs(); } catch (x) { /* Today off */ } } return false; } }
+  function thrRead() { try { return JSON.parse(ls.get(THR_KEY) || '{}'); } catch (e) { return {}; } }
+  function thrGet(c) { if (!c) return ''; const v = thrRead()[c]; return v && Date.now() - v.t < THR_TTL ? v.id : ''; }
+  function thrSet(c, id) { if (!c || !id) return; const o = thrRead(); if (o[c] && o[c].id === id && Date.now() - o[c].t < 864e5) return; o[c] = { id, t: Date.now() }; const ks = Object.keys(o).sort((a, b) => o[a].t - o[b].t); while (ks.length > 300) delete o[ks.shift()]; ls.set(THR_KEY, JSON.stringify(o)); }
+  /** the card from the index while the Hub checks: a load # in the subject or body, or this thread's load */
+  function quick(m) { const I = idxLoad(); if (!I || !(I.loads || []).length || P.res) return; const by = id => I.loads.find(L => L.id === id);
+    const ids = s => (String(s || '').match(/\b\d{5}-\d{5}\b/g) || []).filter((x, i, a) => a.indexOf(x) === i);
+    const s = ids(m.subject).filter(by), bd = ids(String(m.body || '').slice(0, 4000)).filter(by); let id = '', why = '';
+    if (s.length === 1) { id = s[0]; why = 'Load # in subject'; } else if (!s.length && bd.length === 1) { id = bd[0]; why = 'Load # in the email'; }
+    else if (!s.length && !bd.length) { const t = thrGet(m.conversationId); if (t && by(t)) { id = t; why = 'Same thread as an email saved to ' + t; } }
+    if (!id) return; P.quick = id; $('#app').innerHTML = loadCard(by(id), `<span class="chip ok">${esc(why)}</span>`) + '<div class="card muted"><span class="spin" aria-hidden="true"></span>Checking the Hub…</div>'; }
+  /** a picture that came in an earlier email from the same sender (logo, "Bonded carrier" banner) is a signature, whatever its size */
+  const PUBLIC_MAIL = /@(gmail|yahoo|outlook|hotmail|icloud|aol|live|msn|comcast|att|ymail|protonmail)\./i;
+  const sigOwner = m => { const f = String(m && m.from || '').toLowerCase(); return PUBLIC_MAIL.test(f) ? f : (f.split('@')[1] || f); };
+  const isImg = a => /^image\//i.test(a.contentType || '') || /\.(png|jpe?g|gif|bmp|webp)$/i.test(a.name || '');
+  const isPdf = a => /pdf/i.test(a.contentType || '') || /\.pdf$/i.test(a.name || '');
+  function sigStore() { try { return JSON.parse(ls.get(SIG_KEY) || '{}'); } catch (e) { return {}; } }
+  function markRepeat(files) { const m = P.mail; if (!m || !files) return; const S = sigStore()[sigOwner(m)] || {}; const me = memoKey(m);
+    files.forEach(f => { const a = (m.atts || []).find(x => x.id === f.id); if (a && a.sha256 && isImg(a) && (S[a.sha256] || []).some(id => id !== me)) { f.signature = true; f.repeat = true; } }); }
+  function sigLearn(m) { const own = sigOwner(m); if (!own) return; const o = sigStore(); const S = o[own] = o[own] || {}; const me = memoKey(m); let ch = false;
+    (m.atts || []).forEach(a => { if (a.sha256 && isImg(a)) { const l = S[a.sha256] = S[a.sha256] || []; if (l.indexOf(me) < 0) { l.push(me); if (l.length > 5) l.shift(); ch = true; } } });
+    if (ch) { const ks = Object.keys(o); while (ks.length > 200) delete o[ks.shift()]; ls.set(SIG_KEY, JSON.stringify(o)); } }
+  /* previews: pictures straight from the email; PDFs page 1 through pdf.js (loaded only when a PDF is open) */
+  const PDFV = '3.11.174'; let pdfjs = null; const PDFC = new Map();
+  function pdfLib() { if (pdfjs) return pdfjs; pdfjs = new Promise((ok, bad) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFV + '/pdf.min.js';
+    s.onload = () => { try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/' + PDFV + '/pdf.worker.min.js'; ok(window.pdfjsLib); } catch (e) { bad(e); } }; s.onerror = () => bad(new Error('no pdf.js')); document.head.appendChild(s); });
+    pdfjs.catch(() => {}); return pdfjs; }
+  async function pdfPage1(a) { const k = a.sha256 || a.id; if (PDFC.has(k)) return PDFC.get(k); const p = (async () => { const lib = await pdfLib(); const doc = await lib.getDocument({ data: b64bytes(a.base64) }).promise; const pg = await doc.getPage(1);
+      const v = pg.getViewport({ scale: 1 }); const sc = Math.min(2, 900 / v.width); const vp = pg.getViewport({ scale: sc }); const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+      await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise; return { url: cv.toDataURL('image/jpeg', 0.85), pages: doc.numPages }; })(); PDFC.set(k, p); p.catch(() => PDFC.set(k, Promise.resolve(null))); return p; }
+  function thumb(f) { const a = P.mail && (P.mail.atts || []).find(x => x.id === f.id); if (!a) return '';
+    if (!a.base64) return (isImg(a) || isPdf(a)) && !a.read ? '<span class="thumb ph" aria-hidden="true"></span>' : '';
+    if (isImg(a)) return `<button class="thumb" type="button" data-view="${esc(a.id)}" aria-label="Preview ${esc(a.name)}"><img alt="" src="data:${esc(a.contentType || 'image/png')};base64,${a.base64}" onerror="this.parentNode.innerHTML='<span class=&quot;ic&quot;>IMG</span>'"></button>`;
+    if (isPdf(a)) { const k = a.sha256 || a.id; const hit = PDFC.get(k); if (hit && hit.done) return `<button class="thumb" type="button" data-view="${esc(a.id)}" aria-label="Preview ${esc(a.name)}">${hit.done.url ? `<img alt="" src="${hit.done.url}">` : '<span class="ic">PDF</span>'}</button>`;
+      if (!hit || !hit.wait) { const my = P.seq; pdfPage1(a).then(v => { PDFC.get(k).done = v || { url: '' }; if (my === P.seq) render(); }, () => { const x = PDFC.get(k) || {}; x.done = { url: '' }; PDFC.set(k, x); if (my === P.seq) render(); }); PDFC.get(k).wait = true; }
+      return `<button class="thumb" type="button" data-view="${esc(a.id)}" aria-label="Preview ${esc(a.name)}"><span class="ic">PDF</span></button>`; }
+    return ''; }
+  async function view(id) { const a = P.mail && P.mail.atts.find(x => x.id === id); if (!a || !a.base64) return; const v = $('#viewer'); v.hidden = false;
+    const bar = (extra) => `<div class="vbar"><span>${esc(a.name)}${extra ? ' · ' + esc(extra) : ''}</span><button type="button" data-act="vclose">Close</button></div>`;
+    if (isImg(a)) { v.innerHTML = bar('') + `<div class="vbody"><img alt="${esc(a.name)}" src="data:${esc(a.contentType || 'image/png')};base64,${a.base64}"></div>`; }
+    else { v.innerHTML = bar('') + '<div class="vbody"><div class="vmsg"><span class="spin" aria-hidden="true"></span>Opening…</div></div>'; let r = null; try { r = await pdfPage1(a); } catch (e) { r = null; } if (v.hidden) return;
+      v.innerHTML = r && r.url ? bar('page 1 of ' + r.pages) + `<div class="vbody"><img alt="${esc(a.name)} page 1" src="${r.url}"></div>` : bar('') + '<div class="vbody"><div class="vmsg">No preview for this PDF here. It still saves normally.</div></div>'; }
+    const b = v.querySelector('[data-act="vclose"]'); if (b) b.focus(); }
+  function viewClose() { const v = $('#viewer'); if (v) { v.hidden = true; v.innerHTML = ''; } }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') viewClose(); });
 
   /* ---------- the status line on the email itself (S4) ---------- */
   function statusLine() { const it = Office.context.mailbox.item; const r = P.res; if (!it || !it.notificationMessages || !r) return; let msg = '';
@@ -84,7 +144,7 @@
     else $('#app').innerHTML = '<div class="card muted"><span class="spin" aria-hidden="true"></span>Finding the load…</div>';
     let m; try { m = hit ? hit.mail : await readItem(); } catch (e) { m = null; }
     if (my !== P.seq) return; if (!m) { $('#app').innerHTML = '<div class="card muted">Open an email to see its load.</div>'; return; }
-    P.mail = m; P.ready = readContents(m);
+    P.mail = m; P.ready = readContents(m); P.quick = ''; if (!hit) try { quick(m); } catch (e) { /* no index */ }
     await lookup(my, '', true);
   }
   /** one call for the card now; a second (only with attachments) once their fingerprints are read, for the duplicate check */
@@ -96,7 +156,7 @@
       const r = P.res; if (auto && P.switches && P.switches.me && P.switches.me.auto && r.match && r.match.certain && !r.already && r.loadId) save(true);
     } catch (e) { if (my !== P.seq) return; if (P.res && !e.auth) return toast(e.message); if (e.auth) return setup(e.message); $('#app').innerHTML = `<div class="card"><div class="err">${esc(e.message)}</div><button class="btn" id="retry" type="button" style="margin-top:10px">Try again</button></div>`; $('#retry').onclick = onItem; }
   }
-  function take(r, again) { const keepUpd = again && P.upd; P.res = r; P.switches = r.switches || P.switches; if (!again) P.files = {};
+  function take(r, again) { const keepUpd = again && P.upd; try { markRepeat(r.files); } catch (e) { /* storage blocked */ } P.res = r; P.switches = r.switches || P.switches; if (!again) P.files = {};
     (r.files || []).forEach(f => { const st = P.files[f.id]; if (st && (st.mine || st.saved)) return; P.files[f.id] = { type: f.type, tick: f.state === 'new' && !f.signature }; });
     if (!keepUpd) P.upd = r.update ? { status: r.update.status, eta: r.update.eta, note: r.update.note } : null; }
   function match(m, loadId) { return { internetMessageId: m.internetMessageId, conversationId: m.conversationId, subject: m.subject, from: m.from, body: m.body, loadId: loadId || '', attachments: m.atts.map(a => ({ id: a.id, name: a.name, size: a.size, contentType: a.contentType, isInline: a.isInline, sha256: a.sha256 })) }; }
@@ -135,8 +195,8 @@
     if (r.driver && !P.doneTexts.driver) return 'driver'; const i = r.issueHint; if (i && !P.doneTexts[i.kind] && !(i.open && i.kind === 'det')) return 'issue';
     if (tickedNew) return 'files'; if (r.update && P.upd && !P.doneTexts.update) return 'update'; return r.already ? '' : 'files'; }
   function nextSteps(r, me) { const h = []; const lead = leadOf(r); const B = on => on ? 'btn pri big' : 'btn big sec'; const blocks = {};
-    if (r.driver) { const d = r.driver; const f = d.fields; const rows = [['Driver', f.Driver], ['Phone', f['Driver Phone']], ['Truck', f.Truck], ['Trailer', f.Trailer], ['Tracking', d.link ? d.link.provider : '']].filter(x => x[1]);
-      blocks.driver = P.doneTexts.driver ? done(P.doneTexts.driver) : `<section class="card ${lead === 'driver' ? 'hi' : ''}" aria-label="Driver info found"><span class="lab">Driver info in this email</span><div class="found">${rows.map(x => `<span>${x[0]}</span><b>${esc(x[1])}</b>`).join('')}</div><button class="${B(lead === 'driver')}" type="button" data-do="driver">Fill the load (${plural(rows.length, 'field')})</button></section>`; }
+    if (r.driver) { const d = r.driver; const f = d.fields; const now = d.now || {}; const rows = [['Driver', 'Driver'], ['Phone', 'Driver Phone'], ['Truck', 'Truck'], ['Trailer', 'Trailer']].map(x => [x[0], f[x[1]], now[x[1]] || '']).concat([['Tracking', d.link ? d.link.provider : '', '']]).filter(x => x[1]); const rep = rows.some(x => x[2]);
+      blocks.driver = P.doneTexts.driver ? done(P.doneTexts.driver) : `<section class="card ${lead === 'driver' ? 'hi' : ''}" aria-label="Driver info found"><span class="lab">${rep ? 'New driver info in this email' : 'Driver info in this email'}</span><div class="found">${rows.map(x => `<span>${x[0]}</span><b>${esc(x[1])}${x[2] ? `<span class="was">now ${esc(x[2])}</span>` : ''}</b>`).join('')}</div><button class="${B(lead === 'driver')}" type="button" data-do="driver">${rep ? 'Replace driver info' : 'Fill the load'} (${plural(rows.length, 'field')})</button></section>`; }
     if (r.issueHint) { const i = r.issueHint; const k = i.kind; const on = lead === 'issue';
       blocks.issue = P.doneTexts[k] ? done(P.doneTexts[k]) : i.open && k === 'det' ? done('Detention issue ' + i.open + ' is already open') : `<section class="card ${on ? 'hi' : ''}" aria-label="${esc(i.type)}"><span class="lab">${k === 'det' ? 'Detention' : 'Lumper'}</span>
         ${k === 'det' ? `<div class="found"><span>Stop</span><b>${esc(i.stop)}</b>${i.arrived ? `<span>Arrived</span><b>${esc(i.arrived)}</b>` : ''}<span>Free time</span><b>${esc(i.free)} h (customer rule)</b>${i.starts ? `<span>Starts</span><b>${esc(i.starts)}</b>` : ''}</div>` : `<div class="line">${i.open ? 'Adds this email to ' + esc(i.open) + '. Save the receipt below as Lumper.' : 'Starts a Lumper issue. Save the receipt below as Lumper.'}</div>`}
@@ -158,8 +218,8 @@
     return h.join(''); }
   const done = t => `<div class="done"><span aria-hidden="true">✓</span><span>${esc(t)}</span></div>`;
   function filesHTML(r, me, lead) { const files = r.files || []; const hide = me.hideSig !== false && !P.showSig; const shown = files.filter(f => !(hide && f.signature)); const hidden = files.length - shown.length; const h = [];
-    if (files.length) h.push(`<section class="card" aria-label="Attachments"><span class="lab">Attachments</span>${shown.map((f, i) => { const st = P.files[f.id] || {}; const dis = f.state === 'dup' || f.state === 'noload' || !!st.saved; const txt = st.saved ? st.saved : f.state === 'new' && st.type !== f.type ? 'New · will be saved as ' + st.type : f.text;
-        return `<div class="att"><input type="checkbox" id="att${i}" data-tick="${esc(f.id)}" ${st.tick ? 'checked' : ''} ${dis ? 'disabled' : ''}><div style="flex:1;min-width:0"><label class="nm" for="att${i}">${esc(f.name)}</label><div class="st ${esc(st.saved ? 'new' : f.state)}">${esc(txt)}</div></div><select class="type" data-type="${esc(f.id)}" aria-label="File type for ${esc(f.name)}" ${dis ? 'disabled' : ''}>${TYPES.map(t => `<option${t === (st.type || f.type) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`; }).join('')}
+    if (files.length) h.push(`<section class="card" aria-label="Attachments"><span class="lab">Attachments</span>${shown.map((f, i) => { const st = P.files[f.id] || {}; const dis = f.state === 'dup' || f.state === 'noload' || !!st.saved; const txt = st.saved ? st.saved : f.repeat ? 'In earlier emails from this sender too · treated as a signature' : f.state === 'new' && st.type !== f.type ? 'New · will be saved as ' + st.type : f.text;
+        return `<div class="att"><input type="checkbox" id="att${i}" data-tick="${esc(f.id)}" ${st.tick ? 'checked' : ''} ${dis ? 'disabled' : ''}>${thumb(f)}<div style="flex:1;min-width:0"><label class="nm" for="att${i}">${esc(f.name)}</label><div class="st ${esc(st.saved ? 'new' : f.state)}">${esc(txt)}</div></div><select class="type" data-type="${esc(f.id)}" aria-label="File type for ${esc(f.name)}" ${dis ? 'disabled' : ''}>${TYPES.map(t => `<option${t === (st.type || f.type) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></div>`; }).join('')}
       ${hidden || P.showSig ? `<button class="lk" type="button" data-act="sig">${P.showSig ? 'Hide signature images' : plural(hidden, 'signature image') + ' hidden · show'}</button>` : ''}</section>`);
     P.conflicts.forEach(c => h.push(`<section class="conflict" aria-label="File conflict"><b>${esc(c.name)}</b><p>${esc(c.text)}</p><div class="row"><button class="btn pri" type="button" data-res="new" data-doc="${esc(c.docId)}">Save as ${esc(c.next)}</button><button class="btn" type="button" data-res="replace" data-doc="${esc(c.docId)}">Replace</button><button class="btn" type="button" data-res="skip" data-doc="${esc(c.docId)}">Skip</button></div></section>`));
     const ticked = shown.filter(f => (P.files[f.id] || {}).tick && !(P.files[f.id] || {}).saved); if (!r.load || (r.already && !ticked.length)) return h.join('');
@@ -175,6 +235,7 @@
 
   /* ---------- Today (F3) ---------- */
   async function renderToday(fetch) { if (P.tab !== 'today') return; const t = P.today;
+    if (t && fetch) { renderToday(false); api('today', {}, 20000).then(x => { P.today = x; tabs(); if (P.tab === 'today' && P.view === 'main') renderToday(false); }).catch(() => {}); return; }
     if (!t || fetch) { if (!t) $('#app').innerHTML = '<div class="card muted"><span class="spin" aria-hidden="true"></span>Checking your loads…</div>';
       try { P.today = await api('today', {}, 20000); tabs(); } catch (e) { if (!t) { $('#app').innerHTML = `<div class="card"><div class="err">${esc(e.message)}</div></div>`; return; } } if (P.tab !== 'today') return; }
     const T = P.today; if (!T.groups.length) { $('#app').innerHTML = '<section class="card"><b>All clear</b><div class="line muted">No missing PODs, check calls, driver info or rate cons right now.</div></section>'; return; }
@@ -206,6 +267,8 @@
   document.addEventListener('click', e => { const b = e.target.closest('button'); if (!b || b.disabled) return; const d = b.dataset;
     if (b.id === 'gear') return P.view === 'settings' ? back() : settings();
     if (d.tab) return showTab(d.tab);
+    if (d.view) return view(d.view);
+    if (d.act === 'vclose') return viewClose();
     if (d.pick) return pickLoad(d.pick);
     if (d.open) return openLoad(d.open);
     if (d.alsoto) return saveAlso(d.alsoto);
@@ -280,15 +343,15 @@
       <div class="row" style="margin-top:6px"><span class="line muted">Remembers ${plural(n, 'email')} on this computer for 12 hours (no files, no pay).</span><button class="lk" type="button" id="clrmem">Clear</button></div></section>
       <section class="card"><div class="row"><b>Run checks</b><button class="btn" type="button" id="run" style="margin-left:auto">Run</button></div><div id="ck">${P.checks ? checksHTML(P.checks) : '<div class="line muted">Checks Outlook and the Hub connection.</div>'}</div></section>
       <div class="row"><button class="btn" type="button" id="done">Back</button><button class="btn" type="button" id="disc">Disconnect</button></div>`;
-    $('#done').onclick = back; $('#run').onclick = runChecks; $('#disc').onclick = async () => { ls.del(MEM_KEY); MEMO.clear(); await saveSettings({ hubKey: null, hubName: null }); P.key = ''; setup(); };
-    $('#clrmem').onclick = () => { ls.del(MEM_KEY); MEMO.clear(); toast('Memory cleared'); settings(); };
+    $('#done').onclick = back; $('#run').onclick = runChecks; $('#disc').onclick = async () => { ls.del(MEM_KEY); MEMO.clear(); [IDX_KEY, THR_KEY, SIG_KEY].forEach(k => ls.del(k)); P.idx = null; await saveSettings({ hubKey: null, hubName: null }); P.key = ''; setup(); };
+    $('#clrmem').onclick = () => { ls.del(MEM_KEY); MEMO.clear(); [IDX_KEY, THR_KEY, SIG_KEY].forEach(k => ls.del(k)); P.idx = null; toast('Memory cleared'); settings(); };
     $('#pdet').onchange = e => { P.details = e.target.checked; ls.set('fh.details', P.details ? '1' : '0'); };
     document.querySelectorAll('[data-pref]').forEach(i => { i.onchange = async () => { const prefs = {}; prefs[i.dataset.pref] = i.checked; try { const r = await api('prefs', { prefs }, 20000); P.switches = Object.assign({}, P.switches, { me: r.me }); toast('Saved'); } catch (e) { i.checked = !i.checked; toast(e.message); } }; });
     if (runNow) runChecks(); }
   function checksHTML(list) { return `<ul class="checks">${list.map(c => `<li><span class="${c.ok ? 'pass' : 'fail'}">${c.ok ? 'PASS' : 'FAIL'}</span><span>${esc(c.t)}</span></li>`).join('')}</ul><button class="btn" type="button" id="copyck" style="margin-top:8px">Copy results</button>`; }
   async function runChecks() { const out = []; const add = (ok, t) => out.push({ ok: !!ok, t });
     const ver = ['1.14', '1.13', '1.12', '1.11', '1.10', '1.9', '1.8', '1.7', '1.6', '1.5', '1.4', '1.3', '1.2', '1.1'].find(sup) || 'none';
-    add(typeof Office !== 'undefined' && Office.context, 'Office.js loaded · Mailbox ' + ver + ' · panel 4.16');
+    add(typeof Office !== 'undefined' && Office.context, 'Office.js loaded · Mailbox ' + ver + ' · panel 4.16.1');
     add(sup('1.5'), sup('1.5') ? 'Pinning supported' : 'Pinning needs Mailbox 1.5');
     try { const t0 = Date.now(); const r = await api('ping', {}, 20000); add(true, 'Hub reachable, key accepted (' + r.name + ', Hub ' + r.hub + ') · ' + (Date.now() - t0) + ' ms'); } catch (e) { add(false, 'Hub: ' + e.message); }
     const it = Office.context.mailbox.item; const att = it && (it.attachments || []).find(a => !a.isInline);
@@ -307,6 +370,6 @@
     try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, () => { if (P.view === 'main') onItem(); }); } catch (e) { /* not pinnable */ }
     try { Office.context.mailbox.addHandlerAsync(Office.EventType.OfficeThemeChanged, theme); } catch (e) { /* older Outlook */ }
     if (!P.url || !P.key) return setup(); $('#gear').hidden = false; P.view = 'main'; tabs(); onItem();
-    setTimeout(() => { api('today', {}, 20000).then(t => { P.today = t; tabs(); }).catch(() => {}); }, 1500); });   // the Today count, behind the first email
-  window.__fh = { P, runChecks, render, memRead };   // for the tests
+    idxLoad(); tabs(); setTimeout(idxRefresh, 1200); setInterval(() => { if (P.view === 'main') idxRefresh(); }, 120000); });   // v4.16.1: the load index + Today in one call, behind the first email; again every 2 min
+  window.__fh = { P, runChecks, render, memRead, thrRead, sigStore };   // for the tests
 })();
