@@ -1,4 +1,4 @@
-/* Freight Hub for Outlook (v4.15). 300–450 px wide; every control is at least 44 px tall. */
+/* Freight Hub for Outlook (v4.16). 300–450 px wide; every control is at least 44 px tall. */
 :root{--bg:#fcfcfd;--card:#ffffff;--line:#e4e7ec;--line2:#f2f4f7;--text:#101828;--sub:#344054;--muted:#475467;--brand:#24467a;--brand-ink:#ffffff;--link:#175cd3;--red:#b42318;
   --ok:#067647;--ok-bg:#ecfdf3;--ok-line:#abefc6;--warn:#93370d;--warn-ink:#b54708;--warn-bg:#fffaeb;--warn-line:#fedf89;--info:#1849a9;--info-bg:#eff8ff;--chip:#f2f4f7}
 body.dark{--bg:#1b1d22;--card:#24272e;--line:#3a3f4a;--line2:#2e323a;--text:#f2f4f7;--sub:#d0d5dd;--muted:#a3abb8;--brand:#5b8def;--brand-ink:#0f1115;--link:#84adff;--red:#f97066;
@@ -64,3 +64,41 @@ textarea.inp{min-height:70px;resize:vertical}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.spin{animation:none}}
+/* v4.15.1: the file type is a dropdown */
+select.type{padding:0 8px;max-width:140px;font-family:inherit}
+select.type:disabled{opacity:.6;cursor:default}
+
+/* v4.16: tabs, one clear next step per email, Today, Find */
+.tabs{display:flex;gap:2px;padding:0 8px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:61px;z-index:2}
+.tab{flex:1;min-height:44px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font-weight:600;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--brand)}
+.badge{min-width:18px;height:18px;border-radius:9px;background:var(--red);color:#fff;font-size:11px;display:inline-grid;place-items:center;padding:0 5px;font-weight:700}
+main{gap:10px}
+.card.load .lid{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
+.card.load .status{margin-top:0}
+.sub{font-size:12px;color:var(--muted);margin-top:2px}
+.next{margin-top:8px;font-size:12px;font-weight:600;color:var(--warn-ink);background:var(--warn-bg);border-radius:6px;padding:5px 8px}
+details>summary{cursor:pointer;min-height:36px;display:flex;align-items:center;font-size:12px;color:var(--link);list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸";margin-right:6px;font-size:10px}
+details[open]>summary::before{content:"▾"}
+.card.load details{margin-top:4px}
+.card.hi{border-color:var(--ok-line);box-shadow:inset 3px 0 0 var(--ok)}
+.found{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;font-size:13px;margin:8px 0 10px}
+.found span{color:var(--muted)}.found b{overflow-wrap:anywhere}
+.grid2{display:grid;grid-template-columns:52px minmax(0,1fr);gap:6px 8px;align-items:center;margin-top:6px}
+.grid2 label.f{margin:0}
+select.inp{min-height:44px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:0 8px;width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.pill{min-height:36px;border:1px solid var(--line);border-radius:18px;background:var(--card);padding:0 12px;font-size:12px;cursor:pointer;color:var(--sub)}
+.pill:hover{background:var(--line2)}
+.find-inline{display:flex;gap:6px;margin-top:8px}.find-inline .inp{flex:1;min-width:0}
+.btn.sm{min-height:36px;padding:0 10px;font-size:12px;flex:none}
+.carr,.li{display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line2)}
+.carr:first-of-type,.li:first-of-type{border-top:0}
+.lirow{flex:1;min-width:0;text-align:left;border:0;background:transparent;padding:4px 0;cursor:pointer;min-height:44px}
+.lirow:hover b{text-decoration:underline}
+.grp>summary{color:var(--text);font-size:13px;gap:6px}
+.lk{display:inline-flex;align-items:center}
+.btn.sec{background:var(--card);color:var(--brand);border:1px solid var(--brand);font-weight:600;margin-top:2px}
+details.card>summary{color:var(--sub);font-weight:600;font-size:13px}
