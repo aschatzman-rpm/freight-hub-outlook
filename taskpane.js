@@ -1,4 +1,5 @@
-/* Freight Hub for Outlook (v4.16.1) · the panel.
+/* Freight Hub for Outlook (v4.17) · the panel.
+   v4.17: Send RC on the load card: a new message with Andrew's template and the rate con PDF attached (Mailbox 1.9). No pay in the text.
    v4.16.1: previews, 3 tries before an error, a light load index (card before the Hub answers), memory per thread,
    repeated images = signature, instant Today, and now → email when the driver changes.
    Holds no data, no keys and no Hub address in code: those are typed in once and kept in Outlook roamingSettings (your mailbox).
@@ -177,7 +178,7 @@
       <div class="lid">${esc(L.id)} <span class="status">${esc(L.status)}</span></div><div class="lane">${esc(L.lane)}</div>
       <div class="sub">${esc([L.carrier, L.driver ? 'Driver ' + L.driver.split(' · ')[0] : ''].filter(Boolean).join(' · '))}</div>
       ${L.next ? `<div class="next">Next: ${esc(L.next)}</div>` : L.missing && L.missing.length ? `<div class="next">Missing: ${esc(L.missing.join(', '))}</div>` : ''}${L.issue ? `<div class="line">Open issue: ${esc(L.issue)}</div>` : ''}
-      <details ${open ? 'open' : ''} data-details="1"><summary>Details</summary><div class="kv">${rows.map(x => `<span>${x[0]}</span><span>${esc(x[1])}</span>`).join('')}</div></details></section>`; }
+      <details ${open ? 'open' : ''} data-details="1"><summary>Details</summary><div class="kv">${rows.map(x => `<span>${x[0]}</span><span>${esc(x[1])}</span>`).join('')}</div></details>${L.rc ? `<button class="btn act rcbtn" type="button" data-rc="${esc(L.id)}">Send RC (PDF attached)</button>` : ''}</section>`; }
   function render() { if (P.tab !== 'email' || P.view !== 'main') return; const r = P.res, m = P.mail; if (!r || !m) return; const sw = P.switches || {}; const me = sw.me || {}; const h = [];
     if (me.auto) h.push('<div class="note">Auto-save is on: certain matches save when you open them.</div>');
     if (r.load) { const ok = r.match.certain || r.match.picked; h.push(loadCard(r.load, `<span class="chip ${ok ? 'ok' : 'warn'}">${esc(r.match.reason)}</span>`, { change: true })); }
@@ -254,6 +255,15 @@
         ((r.drafts || []).length ? `<section class="card"><span class="lab">Email</span><div class="chips">${r.drafts.map(t => `<button class="pill" type="button" data-ltpl="${esc(t.id)}">${esc(t.name)}</button>`).join('')}</div></section>` : '') + '<button class="lk" type="button" data-act="back">‹ Back</button>'; }
     catch (e) { $('#app').innerHTML = `<div class="card"><div class="err">${esc(e.message)}</div></div>`; } }
 
+  /* ---------- v4.17: Send RC with the PDF attached ---------- */
+  const canAttach = () => { try { return !!(Office.context.requirements && Office.context.requirements.isSetSupported('Mailbox', '1.9')); } catch (e) { return false; } };
+  async function sendRc(id, b) { if (!canAttach()) { toast('This Outlook can\'t attach a Hub file from the panel. In the Hub: load page › Send RC › Open in Outlook (it downloads the draft with the PDF).'); return; }
+    const lab = b ? b.textContent : ''; if (b) { b.disabled = true; b.textContent = 'Getting the rate con…'; }
+    try { const r = await api('rc', { loadId: id }, 30000); const mb = Office.context.mailbox;
+      mb.displayNewMessageFormAsync({ toRecipients: r.to || [], ccRecipients: r.cc || [], subject: r.subject, htmlBody: html(r.body), attachments: [{ type: 'base64', name: r.file.name, content: r.file.base64 }] },
+        res => { if (res && res.status === 'failed') toast('Outlook couldn\'t attach the PDF here (' + ((res.error && res.error.message) || 'not allowed') + '). Use Send RC in the Hub.'); else toast('Draft open with ' + r.file.name + ' attached. Check it and press Send.'); }); }
+    catch (e) { toast(e.message); } finally { if (b) { b.disabled = false; b.textContent = lab || 'Send RC (PDF attached)'; } } }
+
   /* ---------- drafts (F5, offers, Today asks) ---------- */
   const html = t => esc(t).replace(/\n/g, '<br>');
   function draft(t, preferReply) { const it = Office.context.mailbox.item; const fromSender = it && P.mail && t.to.some(x => String(x).toLowerCase() === String(P.mail.from).toLowerCase());
@@ -271,6 +281,7 @@
     if (d.act === 'vclose') return viewClose();
     if (d.pick) return pickLoad(d.pick);
     if (d.open) return openLoad(d.open);
+    if (d.rc) return sendRc(d.rc, b);
     if (d.alsoto) return saveAlso(d.alsoto);
     if (d.res) return resolve(d.doc, d.res);
     if (d.do) return act(d.do);
@@ -351,7 +362,8 @@
   function checksHTML(list) { return `<ul class="checks">${list.map(c => `<li><span class="${c.ok ? 'pass' : 'fail'}">${c.ok ? 'PASS' : 'FAIL'}</span><span>${esc(c.t)}</span></li>`).join('')}</ul><button class="btn" type="button" id="copyck" style="margin-top:8px">Copy results</button>`; }
   async function runChecks() { const out = []; const add = (ok, t) => out.push({ ok: !!ok, t });
     const ver = ['1.14', '1.13', '1.12', '1.11', '1.10', '1.9', '1.8', '1.7', '1.6', '1.5', '1.4', '1.3', '1.2', '1.1'].find(sup) || 'none';
-    add(typeof Office !== 'undefined' && Office.context, 'Office.js loaded · Mailbox ' + ver + ' · panel 4.16.1');
+    add(typeof Office !== 'undefined' && Office.context, 'Office.js loaded · Mailbox ' + ver + ' · panel 4.17');
+    add(true, canAttach() ? 'Send RC attaches the PDF (Mailbox 1.9)' : 'Send RC: this Outlook can\'t attach from the panel, so use the Hub\'s download');
     add(sup('1.5'), sup('1.5') ? 'Pinning supported' : 'Pinning needs Mailbox 1.5');
     try { const t0 = Date.now(); const r = await api('ping', {}, 20000); add(true, 'Hub reachable, key accepted (' + r.name + ', Hub ' + r.hub + ') · ' + (Date.now() - t0) + ' ms'); } catch (e) { add(false, 'Hub: ' + e.message); }
     const it = Office.context.mailbox.item; const att = it && (it.attachments || []).find(a => !a.isInline);

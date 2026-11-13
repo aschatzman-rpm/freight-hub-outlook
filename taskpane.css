@@ -1,4 +1,4 @@
-/* Freight Hub for Outlook (v4.16.1). 300–450 px wide; every control is at least 44 px tall. */
+/* Freight Hub for Outlook (v4.17). 300–450 px wide; every control is at least 44 px tall. */
 :root{--bg:#fcfcfd;--card:#ffffff;--line:#e4e7ec;--line2:#f2f4f7;--text:#101828;--sub:#344054;--muted:#475467;--brand:#24467a;--brand-ink:#ffffff;--link:#175cd3;--red:#b42318;
   --ok:#067647;--ok-bg:#ecfdf3;--ok-line:#abefc6;--warn:#93370d;--warn-ink:#b54708;--warn-bg:#fffaeb;--warn-line:#fedf89;--info:#1849a9;--info-bg:#eff8ff;--chip:#f2f4f7}
 body.dark{--bg:#1b1d22;--card:#24272e;--line:#3a3f4a;--line2:#2e323a;--text:#f2f4f7;--sub:#d0d5dd;--muted:#a3abb8;--brand:#5b8def;--brand-ink:#0f1115;--link:#84adff;--red:#f97066;
@@ -117,3 +117,5 @@ details.card>summary{color:var(--sub);font-weight:600;font-size:13px}
 .viewer .vmsg{color:#fff;margin:auto;text-align:center}
 #retry-note{margin:8px 10px 0}
 .found .was{display:block;font-weight:400;font-size:12px;color:var(--muted);text-decoration:line-through}
+/* v4.17: Send RC */
+.card.load .rcbtn{margin-top:8px;width:100%}
